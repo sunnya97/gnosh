@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent/tools"
@@ -75,4 +76,20 @@ func TestOutcomeGuardClearedBySuccessAndPerSession(t *testing.T) {
 	_, _ = w[0].Run(s1, fantasy.ToolCall{Name: tools.BashToolName, Input: `{"command":"true"}`})
 	resp, _ = w[1].Run(s1, pop)
 	require.False(t, resp.IsError, "a later success clears the failure")
+}
+
+func TestOutcomeGuardTimeNotes(t *testing.T) {
+	g := newOutcomeGuard()
+	start := time.Unix(1000, 0)
+	g.setBudget("s", start, start.Add(10*time.Minute))
+	require.Empty(t, g.timeNote("s", start.Add(4*time.Minute)))
+	note := g.timeNote("s", start.Add(5*time.Minute))
+	require.Contains(t, note, "about 5 of this task's 10 minutes are left")
+	require.Empty(t, g.timeNote("s", start.Add(6*time.Minute)), "once per threshold")
+	// Jumping past two thresholds gives one note.
+	require.Contains(t, g.timeNote("s", start.Add(9*time.Minute+30*time.Second)), "(30 seconds)")
+	require.Empty(t, g.timeNote("s", start.Add(9*time.Minute+50*time.Second)))
+	require.Empty(t, g.timeNote("other", start.Add(9*time.Minute)))
+	g.setBudget("s", start, time.Time{})
+	require.Empty(t, g.timeNote("s", start.Add(9*time.Minute)))
 }

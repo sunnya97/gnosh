@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent/tools"
@@ -39,10 +40,59 @@ type failedCommand struct {
 type outcomeGuard struct {
 	mu     sync.Mutex
 	failed map[string]failedCommand
+	// budgets are the completion loop's time budgets by session (see
+	// setBudget), for the time notes on bash results.
+	budgets map[string]*timeBudget
 }
 
+// timeBudget is a turn's wall-clock budget, from start to deadline, and
+// how many of timeNoteAt's notes it has been given.
+type timeBudget struct {
+	start, deadline time.Time
+	noted           int
+}
+
+// timeNoteAt are the fractions of a turn's time budget used up at which
+// a bash result carries a note of the time left. Benchmark tasks with a
+// hard time limit were lost with their output never written: the agent,
+// one long first turn in, did not know the time was nearly gone.
+var timeNoteAt = []float64{0.5, 0.75, 0.9}
+
 func newOutcomeGuard() *outcomeGuard {
-	return &outcomeGuard{failed: map[string]failedCommand{}}
+	return &outcomeGuard{failed: map[string]failedCommand{}, budgets: map[string]*timeBudget{}}
+}
+
+// setBudget records a session's turn budget; a zero deadline clears it.
+func (g *outcomeGuard) setBudget(sessionID string, start, deadline time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if deadline.IsZero() || !deadline.After(start) {
+		delete(g.budgets, sessionID)
+		return
+	}
+	g.budgets[sessionID] = &timeBudget{start: start, deadline: deadline}
+}
+
+// timeNote is the note to add to a result at now, or "".
+func (g *outcomeGuard) timeNote(sessionID string, now time.Time) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	b := g.budgets[sessionID]
+	if b == nil || b.noted >= len(timeNoteAt) {
+		return ""
+	}
+	total := b.deadline.Sub(b.start)
+	used := float64(now.Sub(b.start)) / float64(total)
+	if used < timeNoteAt[b.noted] {
+		return ""
+	}
+	for b.noted < len(timeNoteAt) && used >= timeNoteAt[b.noted] {
+		b.noted++
+	}
+	left := max(0, b.deadline.Sub(now))
+	return fmt.Sprintf("\n\n[gnosh: about %d of this task's %d minutes are left (%d seconds). "+
+		"If what the task must produce (its output files, its running service, its commit) is not in place yet, put it in place now, simplest working version first, then improve it.]",
+		int(left.Minutes()+0.5), int(total.Minutes()+0.5), int(left.Seconds()))
 }
 
 // outcomes is shared by every agent's tools: keyed by session, a
@@ -138,6 +188,9 @@ func (t *outcomeGuardedTool) Run(ctx context.Context, call fantasy.ToolCall) (fa
 	resp, err := t.inner.Run(ctx, call)
 	if err == nil {
 		t.g.observe(sessionID, call, resp)
+		if call.Name == tools.BashToolName && resp.Type == "text" {
+			resp.Content += t.g.timeNote(sessionID, time.Now())
+		}
 	}
 	return resp, err
 }

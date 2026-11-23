@@ -891,7 +891,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// The completion loop takes the workspace's state as the user's prompt
 	// starts a turn, before the agent changes anything.
 	if call.verify == nil && !call.HiddenUserMessage {
-		call.verify = a.startVerify(ctx, call.Prompt)
+		call.verify = a.startVerify(ctx, call.SessionID, call.Prompt)
 	}
 	// The turn's hooks are told the session's permission mode, as Claude
 	// Code tells them; a sub-agent's turn keeps its parent's.

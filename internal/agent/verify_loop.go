@@ -33,7 +33,7 @@ func (a *sessionAgent) verifyConfig() verify.Config {
 // startVerify starts the completion loop for a turn the user's prompt
 // begins; nil when the loop is off, for a sub-agent, whose parent's turn
 // is the one verified, or without a working directory.
-func (a *sessionAgent) startVerify(ctx context.Context, prompt string) *verify.Run {
+func (a *sessionAgent) startVerify(ctx context.Context, sessionID, prompt string) *verify.Run {
 	if a.isSubAgent || a.cfg == nil {
 		return nil
 	}
@@ -43,6 +43,7 @@ func (a *sessionAgent) startVerify(ctx context.Context, prompt string) *verify.R
 	}
 	r := verify.Start(ctx, c, a.cfg.WorkingDir(), prompt)
 	if r != nil {
+		outcomes.setBudget(sessionID, r.Started, r.Deadline())
 		var names []string
 		for _, ch := range r.Checks() {
 			names = append(names, ch.Name)
