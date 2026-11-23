@@ -1,0 +1,152 @@
+package model
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/crush/internal/session"
+)
+
+// roundedBorderRunes are chars that only appear when a pill has a visible
+// rounded border.
+const roundedBorderRunes = "╭╮╰╯"
+
+func hasRoundedBorder(s string) bool {
+	return strings.ContainsAny(s, roundedBorderRunes)
+}
+
+// queuePillHasBorder reports whether the "N Queued" pill is wrapped in a
+// rounded border by checking the line directly above the queue label for a
+// top border corner.
+func queuePillHasBorder(view string) bool {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "Queued") {
+			continue
+		}
+		if i == 0 {
+			return false
+		}
+		return strings.ContainsAny(lines[i-1], "╭╮")
+	}
+	return false
+}
+
+// TestQueuePillAlwaysHasBorder guards CHARM-1678: the queued-prompts pill must
+// render with its rounded border regardless of panel expansion or which pill
+// section is nominally focused.
+func TestQueuePillAlwaysHasBorder(t *testing.T) {
+	incompleteTodos := []session.Todo{{Content: "a", Status: session.TodoStatusPending}}
+
+	cases := []struct {
+		name           string
+		expanded       bool
+		focusedSection pillSection
+		todos          []session.Todo
+		queue          int
+	}{
+		{"collapsed only queue", false, pillSectionTodos, nil, 2},
+		{"collapsed queue+todos", false, pillSectionTodos, incompleteTodos, 2},
+		{"expanded queue focused", true, pillSectionQueue, nil, 2},
+		{"expanded stale todos focus only queue", true, pillSectionTodos, nil, 2},
+		{"expanded todos focused queue+todos", true, pillSectionTodos, incompleteTodos, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newTestUI()
+			u.session = &session.Session{ID: "s1", Todos: tc.todos}
+			u.promptQueue = tc.queue
+			u.pillsExpanded = tc.expanded
+			u.focusedPillSection = tc.focusedSection
+			u.updateLayoutAndSize()
+			u.renderPills()
+
+			if !hasRoundedBorder(u.pillsView) {
+				t.Fatalf("expected a rounded border somewhere in pills view:\n%s", u.pillsView)
+			}
+			if !queuePillHasBorder(u.pillsView) {
+				t.Fatalf("expected the queue pill to have a border:\n%s", u.pillsView)
+			}
+		})
+	}
+}
+
+// TestEffectiveFocusedSectionFallsThrough verifies that a stale focused section
+// (pointing at a section with no content) resolves to the section that still
+// has content, so the expanded list stays populated.
+func TestEffectiveFocusedSectionFallsThrough(t *testing.T) {
+	cases := []struct {
+		name     string
+		stored   pillSection
+		todos    []session.Todo
+		queue    int
+		expected pillSection
+	}{
+		{"todos focus but only queue", pillSectionTodos, nil, 2, pillSectionQueue},
+		{"queue focus but only todos", pillSectionQueue, []session.Todo{{Content: "a", Status: session.TodoStatusPending}}, 0, pillSectionTodos},
+		{"todos focus with todos", pillSectionTodos, []session.Todo{{Content: "a", Status: session.TodoStatusPending}}, 2, pillSectionTodos},
+		{"queue focus with queue", pillSectionQueue, nil, 2, pillSectionQueue},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newTestUI()
+			u.session = &session.Session{ID: "s1", Todos: tc.todos}
+			u.promptQueue = tc.queue
+			u.focusedPillSection = tc.stored
+			if got := u.effectiveFocusedSection(); got != tc.expected {
+				t.Fatalf("effectiveFocusedSection() = %d, want %d", got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestLoopPillShowsWhileTheLoopRuns covers the only outward sign that /loop
+// is driving the session. A loop starts turns by itself, so without the pill
+// a user who steps away cannot tell whether the session is working on its own
+// or waiting for them.
+func TestLoopPillShowsWhileTheLoopRuns(t *testing.T) {
+	u := newTestUI()
+	u.session = &session.Session{ID: "s1"}
+	u.loop = loopState{active: true, sessionID: "s1", turns: 7}
+	u.updateLayoutAndSize()
+	u.renderPills()
+
+	if !strings.Contains(u.pillsView, "Loop turn 7") {
+		t.Fatalf("expected the loop pill in the pills view:\n%s", u.pillsView)
+	}
+
+	u.loop.maxTurns = 10
+	u.renderPills()
+	if !strings.Contains(u.pillsView, "Loop 3 left") {
+		t.Fatalf("under a loop_max_turns cap the pill counts down:\n%s", u.pillsView)
+	}
+}
+
+// TestNoLoopPillWhenIdle pins the other half: an idle session must not grow a
+// pills row it would otherwise not have.
+func TestNoLoopPillWhenIdle(t *testing.T) {
+	u := newTestUI()
+	u.session = &session.Session{ID: "s1"}
+	u.updateLayoutAndSize()
+	u.renderPills()
+
+	if strings.Contains(u.pillsView, "Loop") {
+		t.Fatalf("no loop is running, so no loop pill belongs here:\n%s", u.pillsView)
+	}
+}
+
+// TestLoopPillSurvivesTheFinalTurn pins the window where a capped loop is
+// still running but its budget has already been spent: a turn is counted when
+// its continuation is sent, so the last turn runs with zero remaining. The
+// layout reserves a pills row for the active loop, so the pill has to fill it.
+func TestLoopPillSurvivesTheFinalTurn(t *testing.T) {
+	u := newTestUI()
+	u.session = &session.Session{ID: "s1"}
+	u.loop = loopState{active: true, sessionID: "s1", turns: 5, maxTurns: 5}
+	u.updateLayoutAndSize()
+	u.renderPills()
+
+	if !strings.Contains(u.pillsView, "Loop 0 left") {
+		t.Fatalf("the reserved pills row must not be left blank on the final turn:\n%s", u.pillsView)
+	}
+}

@@ -1,0 +1,76 @@
+package cmd
+
+import (
+	"testing"
+
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
+)
+
+func permissionModeCmd(t *testing.T, args ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "test"}
+	addPermissionModeFlag(cmd)
+	addYoloFlags(cmd)
+	require.NoError(t, cmd.ParseFlags(args))
+	return cmd
+}
+
+// Claude Code's permission modes that gnosh has: plan, acceptEdits,
+// bypassPermissions and default; dontAsk and auto are refused by name.
+func TestPermissionModeFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args       []string
+		want, fail string
+	}{
+		{nil, "", ""},
+		{[]string{"--permission-mode", "default"}, "default", ""},
+		{[]string{"--permission-mode", "acceptEdits"}, "acceptEdits", ""},
+		{[]string{"--permission-mode", "bypassPermissions"}, "bypassPermissions", ""},
+		{[]string{"--permission-mode", "plan"}, "plan", ""},
+		{[]string{"--permission-mode", "dontAsk"}, "dontAsk", ""},
+		{[]string{"--permission-mode", "manual"}, "default", ""},
+		{[]string{"--permission-mode", "auto"}, "", "--permission-mode auto is not supported yet"},
+		{[]string{"--permission-mode", "yolo"}, "", `--permission-mode "yolo": expected default, acceptEdits, dontAsk, bypassPermissions or plan`},
+	} {
+		got, err := permissionModeFlag(permissionModeCmd(t, tc.args...))
+		if tc.fail != "" {
+			require.ErrorContains(t, err, tc.fail, "%q", tc.args)
+			continue
+		}
+		require.NoError(t, err, "%q", tc.args)
+		require.Equal(t, tc.want, got)
+	}
+}
+
+// --permission-mode bypassPermissions is --yolo by Claude Code's name.
+func TestBypassPermissionsIsYolo(t *testing.T) {
+	require.True(t, yoloFlag(permissionModeCmd(t, "--permission-mode", "bypassPermissions")))
+	require.False(t, yoloFlag(permissionModeCmd(t, "--permission-mode", "plan")))
+	require.False(t, yoloFlag(permissionModeCmd(t)))
+}
+
+// Both gnosh and gnosh run take the flag.
+func TestRootAndRunTakePermissionMode(t *testing.T) {
+	for _, c := range []*cobra.Command{rootCmd, runCmd} {
+		require.NotNil(t, c.Flags().Lookup("permission-mode"), c.Name())
+	}
+}
+
+// A --permission-mode is kept in the runtime overrides: plan as the agent
+// the session starts in, acceptEdits for the hooks, which are told it.
+func TestApplyPermissionMode(t *testing.T) {
+	for mode, want := range map[string]config.RuntimeOverrides{
+		"":                               {},
+		config.PermissionModeDefault:     {},
+		config.PermissionModePlan:        {MainAgent: config.AgentPlan},
+		config.PermissionModeAcceptEdits: {AcceptEdits: true},
+		config.PermissionModeDontAsk:     {DontAsk: true},
+		config.PermissionModeBypass:      {},
+	} {
+		var o config.RuntimeOverrides
+		applyPermissionMode(&o, mode)
+		require.Equal(t, want, o, mode)
+	}
+}

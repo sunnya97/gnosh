@@ -1,0 +1,369 @@
+package dialog
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/catwalk/pkg/catwalk"
+	"github.com/charmbracelet/crush/internal/commands"
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/oauth"
+	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/skills"
+	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/styles"
+	"github.com/charmbracelet/crush/internal/ui/util"
+)
+
+// ActionClose is a message to close the current dialog.
+type ActionClose struct{}
+
+// ActionQuit is a message to quit the application.
+type ActionQuit = tea.QuitMsg
+
+// ActionOpenDialog is a message to open a dialog.
+type ActionOpenDialog struct {
+	DialogID string
+}
+
+// ActionSelectSession is a message indicating a session has been selected,
+// to go on in it or, with Fork, in a copy of it; named Name, when set.
+type ActionSelectSession struct {
+	Session session.Session
+	Fork    bool
+	Name    string
+}
+
+// ActionSelectModel is a message indicating a model has been selected.
+type ActionSelectModel struct {
+	Provider       catwalk.Provider
+	Model          config.SelectedModel
+	ModelType      config.SelectedModelType
+	ReAuthenticate bool
+}
+
+// Messages for commands
+type (
+	ActionNewSession        struct{}
+	ActionToggleHelp        struct{}
+	ActionToggleCompactMode struct{}
+	ActionToggleThinking    struct{}
+	// ActionSetThinking stores the /think or /no_think switch.
+	ActionSetThinking struct{ Enabled bool }
+	// ActionSetLoop starts or stops /loop, which keeps a session working
+	// until the model reports the task finished.
+	ActionSetLoop                 struct{ Enabled bool }
+	ActionTogglePills             struct{}
+	ActionExternalEditor          struct{}
+	ActionToggleYoloMode          struct{}
+	ActionToggleNotifications     struct{}
+	ActionSelectNotificationStyle struct {
+		Style string
+	}
+	ActionToggleTransparentBackground struct{}
+	ActionToggleMouseSupport          struct{}
+	ActionSwitchTheme                 struct {
+		Theme string
+	}
+	ActionPreviewTheme struct {
+		Theme string
+	}
+	ActionRevertThemePreview  struct{}
+	ActionPreviewThemePalette struct {
+		Base    string
+		Palette styles.Palette
+	}
+	ActionSaveThemePalette struct {
+		Name    string
+		Base    string
+		Palette styles.Palette
+	}
+	ActionEditTheme struct {
+		Name string
+	}
+	ActionRevertThemePalette    struct{}
+	ActionRevertOverriddenTheme struct {
+		Name string
+	}
+	ActionCreateTheme struct {
+		Name string
+		Base string
+	}
+	ActionRenameTheme struct {
+		OldName string
+		NewName string
+	}
+	ActionDeleteTheme struct {
+		Name string
+	}
+	ActionInitializeProject struct{}
+	// ActionContextUsage shows what fills the context window, as Claude
+	// Code's /context does.
+	ActionContextUsage struct{}
+	// ActionHooksReport lists the hooks that run, as Claude Code's /hooks
+	// does.
+	ActionHooksReport struct{}
+	// ActionPermissionsReport shows what the agent may do without asking,
+	// as Claude Code's /permissions does.
+	ActionPermissionsReport struct{}
+	// ActionStatusReport shows the session's status, as Claude Code's
+	// /status does.
+	ActionStatusReport struct{}
+	// ActionCopyText copies Text, the part of a response chosen in the copy
+	// picker, and writes it to FileName too.
+	ActionCopyText struct {
+		Text, FileName string
+	}
+	// ActionCopyResponse copies a response to the clipboard, as Claude
+	// Code's /copy does: N picks the Nth-latest ("" for the latest).
+	ActionCopyResponse struct {
+		N string
+	}
+	// ActionTasks lists the background jobs, as Claude Code's /tasks does.
+	ActionTasks struct{}
+	// ActionRefreshTasks lists the background jobs again.
+	ActionRefreshTasks struct{}
+	// ActionStopTask stops background job ID.
+	ActionStopTask struct {
+		ID string
+	}
+	// ActionDiffReport shows what the session changed, as Claude Code's
+	// /diff shows changes.
+	ActionDiffReport struct{}
+	// ActionDoctorReport checks the setup gnosh runs with, as Claude Code's
+	// /doctor does.
+	ActionDoctorReport struct{}
+	// ActionMem runs /mem with Args ("" to show mem).
+	ActionMem struct {
+		Args string
+	}
+	// ActionExportConversation exports the conversation, as Claude Code's
+	// /export does: to the clipboard when Clipboard is set, else to the
+	// file Filename names, else as the export dialog asks.
+	ActionExportConversation struct {
+		Clipboard bool
+		Filename  string
+	}
+	// ActionSummarize summarizes the session, with Instructions the text
+	// given after /compact, as Claude Code's /compact takes them.
+	ActionSummarize struct {
+		SessionID    string
+		Instructions string
+	}
+	// ActionGoal sets, clears or shows the session's goal, as Claude
+	// Code's /goal does: Condition is the goal, a word that clears it
+	// (clear, off, reset, none, cancel), or "" to show it.
+	ActionGoal struct {
+		Condition string
+	}
+	// ActionAutocompact sets how full the context gets before it is
+	// summarized, as Claude Code's /autocompact does: Window is auto or
+	// a token count, "" to say what is set.
+	ActionAutocompact struct {
+		Window string
+	}
+	// ActionRewind lists the session's prompts to go back to, as Claude
+	// Code's /rewind does.
+	ActionRewind struct {
+		SessionID string
+	}
+	// ActionRewindPick asks what to restore to the point before Prompt.
+	ActionRewindPick struct {
+		SessionID string
+		Prompt    RewindPrompt
+	}
+	// ActionRewindTo restores the conversation, the code or both to the
+	// point before Prompt.
+	ActionRewindTo struct {
+		SessionID          string
+		Prompt             RewindPrompt
+		Conversation, Code bool
+	}
+	// ActionBranchSession copies the session's conversation into a new
+	// session and goes on there, as Claude Code's /branch does; Name is
+	// the branch's name, "" for one after the session.
+	ActionBranchSession struct {
+		SessionID string
+		Name      string
+	}
+	// ActionRenameSession names the session, as Claude Code's /rename
+	// does; Name is "" when none was given.
+	ActionRenameSession struct {
+		SessionID string
+		Name      string
+	}
+	// ActionResumeSession goes to the session Ref names, by ID or name, as
+	// Claude Code's /resume does.
+	ActionResumeSession struct {
+		Ref string
+	}
+	// ActionSelectReasoningEffort is a message indicating a reasoning effort
+	// has been selected.
+	ActionSelectReasoningEffort struct {
+		Effort string
+	}
+	ActionPermissionResponse struct {
+		Permission permission.PermissionRequest
+		Action     PermissionAction
+	}
+	// ActionRunCustomCommand is a message to run a custom command.
+	ActionRunCustomCommand struct {
+		Content   string
+		Arguments []commands.Argument
+		Args      map[string]string // Actual argument values
+		Skill     *skills.Skill     // Set when this is a skill command
+	}
+	// ActionAttachSkill is sent when a skill is selected from the commands
+	// dialog to be attached to the conversation as a markdown attachment.
+	ActionAttachSkill struct {
+		ID   string
+		Name string
+		// Args is what was typed after the skill's name, for the prompt
+		// it goes with.
+		Args string
+	}
+	// ActionRunMCPPrompt is a message to run a custom command.
+	ActionRunMCPPrompt struct {
+		Title       string
+		Description string
+		PromptID    string
+		ClientID    string
+		Arguments   []commands.Argument
+		Args        map[string]string // Actual argument values
+	}
+	// ActionEnableDockerMCP is a message to enable Docker MCP.
+	ActionEnableDockerMCP struct{}
+	// ActionDisableDockerMCP is a message to disable Docker MCP.
+	ActionDisableDockerMCP struct{}
+)
+
+// Messages for MCP OAuth authentication dialog.
+type (
+	// ActionMCPAuthStarted is sent when the user approves authentication
+	// for an MCP server. The UI should initiate the actual auth flow
+	// using the provided context, which the dialog will cancel if the
+	// user closes it.
+	ActionMCPAuthStarted struct {
+		Name string
+		Ctx  context.Context
+	}
+
+	// ActionMCPAuthComplete is sent when MCP authentication succeeds.
+	ActionMCPAuthComplete struct {
+		Name string
+	}
+
+	// ActionMCPAuthErrored is sent when MCP authentication fails.
+	ActionMCPAuthErrored struct {
+		Name  string
+		Error error
+	}
+)
+
+// Messages for API key input dialog.
+type (
+	ActionChangeAPIKeyState struct {
+		State APIKeyInputState
+	}
+)
+
+// Messages for OAuth2 device flow dialog.
+type (
+	// ActionInitiateOAuth is sent when the device auth is initiated
+	// successfully.
+	ActionInitiateOAuth struct {
+		DeviceCode      string
+		UserCode        string
+		ExpiresIn       int
+		VerificationURL string
+		Interval        int
+	}
+
+	// ActionCompleteOAuth is sent when the device flow completes successfully.
+	ActionCompleteOAuth struct {
+		Token *oauth.Token
+	}
+
+	// ActionOAuthErrored is sent when the device flow encounters an error.
+	ActionOAuthErrored struct {
+		Error error
+	}
+
+	// ActionCloseOAuth closes the OAuth dialog and runs the given cleanup
+	// command, cancelling any in-flight authorization. It exists so a
+	// dismissed dialog does not leave a poller or loopback listener
+	// running in the background.
+	ActionCloseOAuth struct {
+		Cmd tea.Cmd
+	}
+
+	// ActionSelectAuthMethod is sent when the user picks how to
+	// authenticate a provider that supports both OAuth and API keys.
+	ActionSelectAuthMethod struct {
+		Provider  catwalk.Provider
+		Model     config.SelectedModel
+		ModelType config.SelectedModelType
+		UseOAuth  bool
+	}
+)
+
+// ActionCmd represents an action that carries a [tea.Cmd] to be passed to the
+// Bubble Tea program loop.
+type ActionCmd struct {
+	Cmd tea.Cmd
+}
+
+// ActionFilePickerSelected is a message indicating a file has been selected in
+// the file picker dialog.
+type ActionFilePickerSelected struct {
+	Path string
+}
+
+// Cmd returns a command that reads the file at path and sends a
+// [message.Attachement] to the program.
+func (a ActionFilePickerSelected) Cmd() tea.Cmd {
+	path := a.Path
+	if path == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		isFileLarge, err := common.IsFileTooBig(path, common.MaxAttachmentSize)
+		if err != nil {
+			return util.InfoMsg{
+				Type: util.InfoTypeError,
+				Msg:  fmt.Sprintf("unable to read the image: %v", err),
+			}
+		}
+		if isFileLarge {
+			return util.InfoMsg{
+				Type: util.InfoTypeError,
+				Msg:  "file too large, max 5MB",
+			}
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return util.InfoMsg{
+				Type: util.InfoTypeError,
+				Msg:  fmt.Sprintf("unable to read the image: %v", err),
+			}
+		}
+
+		mimeBufferSize := min(512, len(content))
+		mimeType := http.DetectContentType(content[:mimeBufferSize])
+		fileName := filepath.Base(path)
+
+		return message.Attachment{
+			FilePath: path,
+			FileName: fileName,
+			MimeType: mimeType,
+			Content:  content,
+		}
+	}
+}

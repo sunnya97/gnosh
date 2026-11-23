@@ -1,0 +1,126 @@
+-- name: CreateSession :one
+INSERT INTO sessions (
+    id,
+    parent_session_id,
+    title,
+    message_count,
+    prompt_tokens,
+    completion_tokens,
+    cost,
+    summary_message_id,
+    updated_at,
+    created_at
+) VALUES (
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    null,
+    strftime('%s', 'now'),
+    strftime('%s', 'now')
+) RETURNING *;
+
+-- name: GetSessionByID :one
+SELECT *
+FROM sessions
+WHERE id = ? LIMIT 1;
+
+-- name: GetLastSession :one
+SELECT *
+FROM sessions
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: ListSessions :many
+SELECT *
+FROM sessions
+WHERE parent_session_id is NULL
+ORDER BY updated_at DESC;
+
+-- name: UpdateSession :one
+UPDATE sessions
+SET
+    title = ?,
+    prompt_tokens = ?,
+    completion_tokens = ?,
+    summary_message_id = ?,
+    cost = ?,
+    todos = ?,
+    channel = ?
+WHERE id = ?
+RETURNING *;
+
+-- name: SetSessionChannel :one
+UPDATE sessions
+SET channel = ?
+WHERE id = ?
+RETURNING *;
+
+-- name: UpdateSessionTitleAndUsage :exec
+UPDATE sessions
+SET
+    title = ?,
+    prompt_tokens = prompt_tokens + ?,
+    completion_tokens = completion_tokens + ?,
+    cost = cost + ?,
+    updated_at = strftime('%s', 'now')
+WHERE id = ?;
+
+
+-- name: UpdateSessionUsage :one
+UPDATE sessions
+SET
+    prompt_tokens = ?,
+    completion_tokens = ?,
+    cost = cost + ?,
+    updated_at = strftime('%s', 'now')
+WHERE id = ?
+RETURNING *;
+
+-- name: AddSessionCost :one
+UPDATE sessions
+SET cost = cost + ?
+WHERE id = ?
+RETURNING id;
+
+-- name: SetSessionTodos :one
+UPDATE sessions
+SET
+    todos = ?,
+    updated_at = strftime('%s', 'now')
+WHERE id = ?
+RETURNING *;
+
+-- name: UpdateSessionSummary :one
+UPDATE sessions
+SET
+    summary_message_id = ?,
+    prompt_tokens = 0,
+    completion_tokens = ?,
+    cost = cost + ?,
+    updated_at = strftime('%s', 'now')
+WHERE id = ?
+RETURNING *;
+
+-- name: RenameSession :exec
+UPDATE sessions
+SET
+    title = ?
+WHERE id = ?;
+
+-- name: DeleteSession :exec
+DELETE FROM sessions
+WHERE id = ?;
+
+-- name: GetSessionGoal :one
+SELECT goal
+FROM sessions
+WHERE id = ? LIMIT 1;
+
+-- name: SwapSessionGoal :execrows
+UPDATE sessions
+SET goal = sqlc.arg(new_goal)
+WHERE id = sqlc.arg(id) AND goal = sqlc.arg(old_goal);

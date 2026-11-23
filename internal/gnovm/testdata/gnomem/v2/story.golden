@@ -1,0 +1,221 @@
+> s1: println(mem.Show())
+mem is empty: mem.Todo("what to get done") adds a todo, and mem.Fact("cmd/test", "…") keeps a fact
+
+> s1: r := mem.Todo("release v2"); r.Todo("bump the version"); r.Todo("tag it"); r.Todo("CI is green")
+added `release-v2` "release v2"
+added `release-v2/bump-version` "bump the version"
+added `release-v2/tag` "tag it"
+added `release-v2/ci-green` "CI is green"
+> s1: mem.Done("release-v2/bump-version", "now 2.0.0")
+done `release-v2/bump-version` "bump the version" → now 2.0.0; next: `release-v2/tag` "tag it"
+> s1: mem.Ask("release-v2/tag", "which key signs the tag?")
+asked `release-v2/tag/which-key-signs-tag` "which key signs the tag?" (for the user); `release-v2/tag` waits on it; next: `release-v2/ci-green` "CI is green"
+> s1: mem.Done("release-v2/tag", "tagged")
+error: `release-v2/tag` "tag it" has open todos `release-v2/tag/which-key-signs-tag` "which key signs the tag?": Done or Drop them first
+> s1: mem.Done("release-v2/tag/which-key-signs-tag", "the YubiKey")
+answered `release-v2/tag/which-key-signs-tag` "which key signs the tag?" → the YubiKey; next: `release-v2/tag` "tag it"
+> s1: mem.Note("release-v2/tag", "the tag needs the release key")
+noted on `release-v2/tag` "tag it" as thought `tag-needs-release-key`
+> s1: mem.Done("Release-v2/tag", "tagged")
+error: names are lowercase, typed as printed: `release-v2/tag`
+> s1: mem.Done("2", "tagged")
+error: `2` is not a name; todos are named under the one they are in, like `fix-flaky/find-cause`: mem.Show() lists them
+> s1: mem.Todo("Release v2")
+error: `release-v2` "release v2" (this session, 3m ago, 1/3 done) is already open: step into it with mem.Frame("release-v2").Push() and add to it with mem.Todo("…"), or give other work a task that tells them apart
+> s1: mem.Todo("renew the TLS cert").Wait("Dec 1")
+added `renew-tls-cert` "renew the TLS cert"
+error: write a day as 2026-12-01 (today is Thu 2026-10-29); nothing was kept, so `renew-tls-cert`, added above, is not in mem
+> s1: mem.Todo("renew the TLS cert").Wait("2026-12-01")
+added `renew-tls-cert` "renew the TLS cert"
+`renew-tls-cert` "renew the TLS cert" waits until 2026-12-01
+> s1: mem.Todo("bump the gno pin").Wait("PR #6399 merged")
+added `bump-gno-pin` "bump the gno pin"
+`bump-gno-pin` "bump the gno pin" waits for: PR #6399 merged
+> s2: mem.Start("release-v2/tag")
+started `release-v2/tag` "tag it"
+> s1: println(mem.Next("release-v2"))
+error: mem.Next takes 0 arguments, not 1: mem.Next()
+> s1: println(mem.Show())
+mem: 3 todos open
+todos:
+  [ ] `release-v2` "release v2" (1/3 done · this session · 2m ago)
+    [x] `release-v2/bump-version` "bump the version" → now 2.0.0
+    [ ] `release-v2/tag` "tag it" (held by session s2, 2m ago)
+      [x] `release-v2/tag/which-key-signs-tag` "which key signs the tag?" → the YubiKey
+    [ ] `release-v2/ci-green` "CI is green"  ← next
+  [ ] `bump-gno-pin` "bump the gno pin" (this session · 3m ago · waits for: PR #6399 merged)
+  [ ] `renew-tls-cert` "renew the TLS cert" (this session · 4m ago · waits until 2026-12-01)
+
+> s1: mem.Fact("cmd/test", "go test ./...")
+fact `cmd/test` is new
+> s1: mem.Fact("cmd/build", "make build")
+fact `cmd/build` is new; `cmd/` also has `cmd/test`
+> s1: mem.Fact("cmd/test", "go test -race ./...")
+fact `cmd/test` changed (was "go test ./...")
+> s1: mem.Fact("cmd/tests", "go test ./internal/...")
+fact `cmd/tests` is new; `cmd/` also has `cmd/build` and `cmd/test`
+> s1: mem.Fact("Cmd/Test", "x")
+error: names are lowercase: `cmd/test`
+> user: mem.Rule("push-after-landing", "push gnosh main to GitHub only after land-branch.sh prints landed:")
+rule `push-after-landing` is new; every session will be given it
+> s1: mem.Drop("bump-gno-pin", "the PR was closed")
+dropped `bump-gno-pin` "bump the gno pin"
+> s1: mem.Reopen("bump-gno-pin")
+reopened `bump-gno-pin` "bump the gno pin"; it waits for: PR #6399 merged
+> s1: mem.Done("release-v2/tag", "tagged v2.0.0")
+error: `release-v2/tag` is held by session s2: only it can pop, close or drop it (resume that session if it has ended)
+> s2: mem.Done("release-v2/tag", "tagged v2.0.0")
+done `release-v2/tag` "tag it" → tagged v2.0.0; next: `release-v2/ci-green` "CI is green"
+> s1: mem.Done("release-v2/ci-green", "go test ./... → ok")
+done `release-v2/ci-green` "CI is green" → go test ./... → ok; next: `release-v2` itself: mem.Done("release-v2", "…") once it holds
+> s1: mem.Done("release-v2", "shipped")
+done `release-v2` "release v2" → shipped
+> s1: println(mem.Show())
+mem: 2 todos open · 1 closed · 1 rule · 3 facts
+rules:
+  `push-after-landing` = push gnosh main to GitHub only after land-branch.sh prints landed:
+todos:
+  [ ] `bump-gno-pin` "bump the gno pin" (this session · 5m ago · waits for: PR #6399 merged)
+  [ ] `renew-tls-cert` "renew the TLS cert" (this session · 17m ago · waits until 2026-12-01)
+closed lately:
+  [x] `release-v2` "release v2" → shipped (2026-10-29)
+facts, newest first:
+  `cmd/tests` = go test ./internal/...
+  `cmd/test` = go test -race ./...
+  `cmd/build` = make build
+
+> s1: println(mem.Show("release-v2"))
+[x] `release-v2` "release v2" (3/3 done)
+  done → shipped
+  made by this session, changed 2m ago
+  [x] `release-v2/bump-version` "bump the version" → now 2.0.0
+  [x] `release-v2/tag` "tag it" → tagged v2.0.0
+  [x] `release-v2/ci-green` "CI is green" → go test ./... → ok
+
+> s1: println(mem.Show("cmd"))
+under `cmd/`:
+  `cmd/build` = make build
+  `cmd/test` = go test -race ./...
+  `cmd/tests` = go test ./internal/...
+
+> s1: mem.Thought("tag-needs-release-key")
+thought `tag-needs-release-key` on `release-v2/tag`: the tag needs the release key
+> s1: mem.Frame("release-v2")
+[x] `release-v2` "release v2" (3/3 done)
+  done → shipped
+  made by this session, changed 5m ago
+  [x] `release-v2/bump-version` "bump the version" → now 2.0.0
+  [x] `release-v2/tag` "tag it" → tagged v2.0.0
+  [x] `release-v2/ci-green` "CI is green" → go test ./... → ok
+> s1: mem.Frame("release-v2/tag")
+[x] `release-v2/tag` "tag it" (under `release-v2` "release v2") (1/1 done)
+  done → tagged v2.0.0
+  made by this session, changed 8m ago
+  thought `tag-needs-release-key`: the tag needs the release key
+  [x] `release-v2/tag/which-key-signs-tag` "which key signs the tag?" → the YubiKey
+> s1: mem.Forget("release-v2")
+forgot `release-v2` and its 4 todos; gnosh erases their text from its files
+> s1: tea := mem.Todo("make tea"); tea.Todo("boil water"); tea.Todo("pour water")
+added `make-tea` "make tea"
+added `make-tea/boil-water` "boil water"
+added `make-tea/pour-water` "pour water"
+> s1: mem.Drop("make-tea", "no kettle")
+dropped `make-tea` "make tea", with its open todos `make-tea/pour-water` and `make-tea/boil-water`
+> s1: mem.Todo("make tea")
+added `make-tea-2` "make tea"
+> s1: mem.Forget("make-tea-2")
+error: `make-tea-2` is open: mem.Drop("make-tea-2", "why") first, then forget it
+> s1: p := mem.Todo("port the tests to gno"); for _, n := range []string{"arith", "bytes", "crypto", "errors", "fmt", "io", "math", "sort", "strings", "time"} { p.Todo(n) }
+added `port-tests-gno` "port the tests to gno"
+added `port-tests-gno/arith` "arith"
+added `port-tests-gno/bytes` "bytes"
+added `port-tests-gno/crypto` "crypto"
+added `port-tests-gno/errors` "errors"
+added `port-tests-gno/fmt` "fmt"
+added `port-tests-gno/io` "io"
+added `port-tests-gno/math` "math"
+added `port-tests-gno/sort` "sort"
+added `port-tests-gno/strings` "strings"
+added `port-tests-gno/time` "time"
+> s1: mem.Done("port-tests-gno", "all ported")
+error: `port-tests-gno` "port the tests to gno" has open todos `port-tests-gno/arith` "arith", `port-tests-gno/bytes` "bytes", `port-tests-gno/crypto` "crypto", `port-tests-gno/errors` "errors" and 6 more: Done or Drop them first
+> s1: for _, n := range []string{"arith", "bytes", "crypto", "errors", "fmt", "io", "math"} { mem.Done("port-tests-gno/"+n, "ported") }
+done `port-tests-gno/arith` "arith" → ported; next: `port-tests-gno/bytes` "bytes"
+done `port-tests-gno/bytes` "bytes" → ported; next: `port-tests-gno/crypto` "crypto"
+done `port-tests-gno/crypto` "crypto" → ported; next: `port-tests-gno/errors` "errors"
+done `port-tests-gno/errors` "errors" → ported; next: `port-tests-gno/fmt` "fmt"
+done `port-tests-gno/fmt` "fmt" → ported; next: `port-tests-gno/io` "io"
+done `port-tests-gno/io` "io" → ported; next: `port-tests-gno/math` "math"
+done `port-tests-gno/math` "math" → ported; next: `port-tests-gno/sort` "sort"
+> s1: println(mem.Show("port-tests-gno"))
+[ ] `port-tests-gno` "port the tests to gno" (7/10 done)
+  made by this session, changed 1m ago
+  [x] `port-tests-gno/arith` … `port-tests-gno/fmt`: 5 done
+  [x] `port-tests-gno/io` "io" → ported
+  [x] `port-tests-gno/math` "math" → ported
+  [ ] `port-tests-gno/sort` "sort"  ← next
+  [ ] `port-tests-gno/strings` "strings"
+  [ ] `port-tests-gno/time` "time"
+
+> s1: d := mem.Todo("tidy the docs"); for _, n := range []string{"a", "b", "c", "d", "e", "f", "g"} { d.Todo(n) }
+added `tidy-docs` "tidy the docs"
+added `tidy-docs/a` "a"
+added `tidy-docs/b` "b"
+added `tidy-docs/c` "c"
+added `tidy-docs/d` "d"
+added `tidy-docs/e` "e"
+added `tidy-docs/f` "f"
+added `tidy-docs/g` "g"
+> s1: mem.Drop("tidy-docs", "moved to the docs session")
+dropped `tidy-docs` "tidy the docs", with its open todos `tidy-docs/g`, `tidy-docs/f`, `tidy-docs/e`, `tidy-docs/d` and 3 more
+> s1: mem.Todo("rotate the staging key").Ask("which day suits you?")
+added `rotate-staging-key` "rotate the staging key"
+asked `rotate-staging-key/which-day-suits-you` "which day suits you?" (for the user); `rotate-staging-key` waits on it
+> s1: mem.Todo("ping the team"); mem.Ask("ping the team", "who is on call?")
+added `ping-team` "ping the team"
+error: "ping the team" is a task, not a name: the todo with that task is `ping-team`; nothing was kept, so `ping-team`, added above, is not in mem
+> s1: mem.Todo("make go test ./... pass", "until-green")
+error: mem.Todo takes 1 argument, not 2: mem.Todo(task)
+> s1: mem.Todo("which Go file declares the most functions?"); mem.Note("which-go-file-declares-the-most-functions", "b.go has 5")
+added `which-go-file-declares` "which Go file declares the most functions?"
+error: `which-go-file-declares-the-most-functions` is not a name: a todo's name keeps at most 4 words of its task, and this one's is `which-go-file-declares`; nothing was kept, so `which-go-file-declares`, added above, is not in mem
+> s1: mem.Fact("cmd/deploy", "make ship ENV=prod"); mem.Note("qa", "Lin does QA")
+fact `cmd/deploy` is new; `cmd/` also has `cmd/build`, `cmd/test` and `cmd/tests`
+error: no item `qa`; mem.Show() lists them; nothing was kept, so fact `cmd/deploy`, set above, is not in mem
+> s1: mem.Note("bump-gno-pin", "the token is sk-live-4f9c2b")
+noted on `bump-gno-pin` "bump the gno pin" as thought `token-sk-live-4f9c2b`
+> s1: mem.Redact("sk-live-4f9c2b")
+redacted it in 1 place; gnosh rewrites mem's files
+> s1: mem.Redact("nothing")
+error: mem holds no such text; Redact takes a secret's exact text
+> s1: println(mem.Show())
+mem: 5 todos open, 1 question for the user · 2 closed · 1 rule · 3 facts
+rules:
+  `push-after-landing` = push gnosh main to GitHub only after land-branch.sh prints landed:
+questions for the user:
+  [?] `rotate-staging-key/which-day-suits-you` "which day suits you?"
+due:
+  [ ] `renew-tls-cert` "renew the TLS cert" (since 2026-12-01)
+todos:
+  [ ] `bump-gno-pin` "bump the gno pin" (this session · 33d ago · waits for: PR #6399 merged)
+  [ ] `rotate-staging-key` "rotate the staging key" (0/1 done · this session · 33d ago · waits on the user)
+    [?] `rotate-staging-key/which-day-suits-you` "which day suits you?"
+  [ ] `port-tests-gno` "port the tests to gno" (7/10 done · this session · 33d ago)
+    [x] `port-tests-gno/arith` … `port-tests-gno/fmt`: 5 done
+    [x] `port-tests-gno/io` "io" → ported
+    [x] `port-tests-gno/math` "math" → ported
+    [ ] `port-tests-gno/sort` "sort"  ← next
+    [ ] `port-tests-gno/strings` "strings"
+    [ ] `port-tests-gno/time` "time"
+  [ ] `make-tea-2` "make tea" (this session · 33d ago)
+  [ ] `renew-tls-cert` "renew the TLS cert" (this session · 33d ago · due since 2026-12-01)
+closed lately:
+  [-] `tidy-docs` "tidy the docs" → moved to the docs session (2026-10-29)
+  [-] `make-tea` "make tea" → no kettle (2026-10-29)
+facts, newest first:
+  `cmd/tests` = go test ./internal/...
+  `cmd/test` = go test -race ./...
+  `cmd/build` = make build
+
+> s1: println(mem.JSON("bump-gno-pin"))
+{"goals":[{"name":"bump-gno-pin","title":"bump the gno pin","status":"","result":"","wait":"PR #6399 merged","for":"","doing":"","by":"s1","changed":1793271060,"steps_open":0,"steps_done":0,"next":"","next_title":"","asks":[],"steps":[],"held":[{"name":"bump-gno-pin","why":"words","title":"bump the gno pin","wait":"PR #6399 merged","doing":"","changed":1793271060}]}]}
