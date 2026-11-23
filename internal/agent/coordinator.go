@@ -1387,6 +1387,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// a file must keep a sub-agent it starts from reading it. Their hooks
 	// see whose calls they are from the context runSubAgent gives the
 	// sub-agent (hooks.WithSubAgent).
+	filteredTools = wrapToolsWithOutcomeGuard(filteredTools, outcomes)
 	filteredTools = wrapToolsWithHooks(filteredTools, c.buildToolHooks())
 
 	return applyUserTools(filteredTools), nil

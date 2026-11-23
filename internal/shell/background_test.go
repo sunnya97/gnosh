@@ -3,6 +3,9 @@ package shell
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -437,4 +440,69 @@ func TestBackgroundShell_ClaimEnd(t *testing.T) {
 	manager.KillAll(t.Context())
 	require.True(t, other.IsDone())
 	require.False(t, other.ClaimEnd(), "KillAll took it")
+}
+
+func TestKeepOnExitJobOutlivesShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix only")
+	}
+	m := newBackgroundShellManager()
+	dir := t.TempDir()
+	m.SetKeepOnExit(dir)
+	marker := filepath.Join(t.TempDir(), "late")
+	// The job prints, outlives Shutdown, and prints again afterwards: its
+	// output goes to a file, not a pipe gnosh would no longer read.
+	job, err := m.Start(t.Context(), t.TempDir(), nil, "echo early; sleep 1; echo late; echo ok > "+marker, "", 10)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { out, _, _, _ := job.GetOutput(); return strings.Contains(out, "early") }, 5*time.Second, 20*time.Millisecond)
+	m.Shutdown(t.Context())
+	require.Empty(t, m.Jobs(""))
+	require.Eventually(t, func() bool { _, err := os.Stat(marker); return err == nil }, 5*time.Second, 50*time.Millisecond)
+	out, _, _, _ := job.GetOutput()
+	require.Contains(t, out, "late")
+	matches, _ := filepath.Glob(filepath.Join(dir, "job-*.out"))
+	require.Len(t, matches, 1)
+}
+
+func TestShutdownKillsJobsByDefault(t *testing.T) {
+	m := newBackgroundShellManager()
+	job, err := m.Start(t.Context(), t.TempDir(), nil, "sleep 30", "", 10)
+	require.NoError(t, err)
+	m.Shutdown(t.Context())
+	require.True(t, job.WaitContext(t.Context()))
+}
+
+// TestKeepOnExitSurvivesProcessExit runs a gnosh stand-in (this test
+// binary) that starts a job and exits at once: the job's process goes on
+// and still writes its output, to the file, after the stand-in is gone.
+func TestKeepOnExitSurvivesProcessExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix only")
+	}
+	if dir := os.Getenv("GNOSH_TEST_KEEP_HELPER"); dir != "" {
+		m := newBackgroundShellManager()
+		m.SetKeepOnExit(dir)
+		job, err := m.Start(context.Background(), dir, nil, "sh -c 'echo early; sleep 1; echo late; touch done'", "", 10)
+		if err != nil {
+			os.Exit(2)
+		}
+		for i := 0; i < 200; i++ {
+			if out, _, _, _ := job.GetOutput(); strings.Contains(out, "early") {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		m.Shutdown(context.Background())
+		os.Exit(0)
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestKeepOnExitSurvivesProcessExit$")
+	cmd.Env = append(os.Environ(), "GNOSH_TEST_KEEP_HELPER="+dir)
+	require.NoError(t, cmd.Run())
+	require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(dir, "done")); return err == nil }, 10*time.Second, 50*time.Millisecond)
+	matches, _ := filepath.Glob(filepath.Join(dir, "job-*.out"))
+	require.Len(t, matches, 1)
+	data, err := os.ReadFile(matches[0])
+	require.NoError(t, err)
+	require.Equal(t, "early\nlate\n", string(data))
 }

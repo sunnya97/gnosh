@@ -628,6 +628,27 @@ type Options struct {
 	// alone and sends nothing anywhere: there is no default.
 	MemEmbeddingsURL string `json:"mem_embeddings_url,omitempty" jsonschema:"description=An OpenAI-compatible embeddings server (such as llama-server --embedding) that mem uses to find by meaning\\, and to recall what bears on each prompt you type. mem's text and your prompts are sent to it to be embedded. Unset\\, mem finds by words alone and sends nothing.,example=http://127.0.0.1:8091/v1"`
 	LoopMaxTurns     *int   `json:"loop_max_turns,omitempty" jsonschema:"description=An optional hard cap on how many turns /loop may drive. Unset (or 0 or negative) means no cap: every 25 turns the agent is asked whether it has a genuine reason to stop and otherwise keeps going.,example=200"`
+	// VerifyRounds turns on the completion loop: when a turn would end,
+	// the workspace is checked (did anything change, do its checks pass,
+	// was a test deleted, is the work committed when the task asks for
+	// it) and the agent is sent back to work, up to this many times, and
+	// asked to account for each requirement before it may stop.
+	// GNOSH_VERIFY_ROUNDS overrides it.
+	VerifyRounds *int `json:"verify_rounds,omitempty" jsonschema:"description=Turn on the completion loop: when a turn would end\\, check the workspace (changes\\, its own tests and checks\\, deleted tests\\, a commit the task asked for) and send the agent back up to this many times\\, then ask it to account for every requirement with evidence. Unset or 0 is off. GNOSH_VERIFY_ROUNDS overrides it.,example=6"`
+	// VerifyWallSec is how long, in seconds from its start, a turn under
+	// the completion loop may run: no round starts that could not finish
+	// within it. GNOSH_VERIFY_WALL_SEC and GNOSH_VERIFY_DEADLINE (a unix
+	// time) override it.
+	VerifyWallSec *int `json:"verify_wall_sec,omitempty" jsonschema:"description=The completion loop's wall-clock budget for a turn\\, in seconds from its start: no round starts without 90 seconds left. GNOSH_VERIFY_WALL_SEC or GNOSH_VERIFY_DEADLINE (unix seconds) override it.,example=780"`
+	// VerifyChecks are the completion loop's checks, each "name=command"
+	// or a command; unset, they are detected from the project's manifests.
+	VerifyChecks []string `json:"verify_checks,omitempty" jsonschema:"description=Commands the completion loop runs to decide the task is done (exit 0 passes)\\, each name=command or a bare command. Unset\\, they are detected from package.json\\, pyproject.toml\\, go.mod\\, Cargo.toml or a Makefile.,example=test=go test ./..."`
+	// VerifyCheckTimeout bounds each check, in seconds.
+	VerifyCheckTimeout *int `json:"verify_check_timeout,omitempty" jsonschema:"description=Seconds each completion-loop check may run before it counts as failed,default=600"`
+	// KeepBackgroundJobs leaves the background jobs the agent started
+	// running when gnosh exits, as a server a grader talks to must be;
+	// their output goes to files. GNOSH_KEEP_BACKGROUND_JOBS overrides it.
+	KeepBackgroundJobs *bool `json:"keep_background_jobs,omitempty" jsonschema:"description=Leave the background jobs the agent started (servers\\, say) running when gnosh exits instead of stopping them; their output goes to files. GNOSH_KEEP_BACKGROUND_JOBS=1 also sets it.,default=false"`
 }
 
 // DefaultMaxBackgroundJobs is how many background shell jobs may run at once

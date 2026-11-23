@@ -276,3 +276,25 @@ func TestOption_RequestTimeoutInvalid(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects a number of seconds")
 }
+
+func TestOption_CompletionLoopAndKeepJobs(t *testing.T) {
+	t.Parallel()
+
+	script := `option verify-rounds 4
+option verify-wall-sec 780
+option verify-check-timeout 120
+option verify-check "test=go test ./..."
+option verify-check "make lint"
+option keep-background-jobs true`
+	jsonBytes, err := LoadShellConfig(t.Context(), filepath.Join(t.TempDir(), "gnoshrc"), []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+	opts := result["options"].(map[string]any)
+	require.EqualValues(t, 4, opts["verify_rounds"])
+	require.EqualValues(t, 780, opts["verify_wall_sec"])
+	require.EqualValues(t, 120, opts["verify_check_timeout"])
+	require.Equal(t, []any{"test=go test ./...", "make lint"}, opts["verify_checks"])
+	require.Equal(t, true, opts["keep_background_jobs"])
+}

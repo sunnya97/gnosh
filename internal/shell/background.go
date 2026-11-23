@@ -5,7 +5,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -47,6 +49,52 @@ func (sb *syncBuffer) String() string {
 	return sb.buf.String()
 }
 
+// jobOutput is where a background job's output goes: a buffer in memory,
+// or, for a manager that keeps its jobs when gnosh exits, a file.
+type jobOutput interface {
+	io.Writer
+	String() string
+}
+
+// fileOutput is a job's output kept in a file. The shell is handed the
+// *os.File itself, so a process the job runs writes to the file
+// descriptor directly rather than through a pipe gnosh reads: once gnosh
+// exits, such a process keeps a place to write, where through a pipe its
+// next write would fail (EPIPE) and most likely end it.
+type fileOutput struct {
+	f *os.File
+}
+
+func newFileOutput(dir, name string) (*fileOutput, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	return &fileOutput{f: f}, nil
+}
+
+func (fo *fileOutput) Write(p []byte) (int, error) { return fo.f.Write(p) }
+
+func (fo *fileOutput) String() string {
+	data, err := os.ReadFile(fo.f.Name())
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// writer is what the shell writes to: the file itself, so that commands
+// it starts inherit its descriptor.
+func writerOf(out jobOutput) io.Writer {
+	if fo, ok := out.(*fileOutput); ok {
+		return fo.f
+	}
+	return out
+}
+
 // BackgroundShell represents a shell running in the background.
 type BackgroundShell struct {
 	ID          string
@@ -58,8 +106,8 @@ type BackgroundShell struct {
 	StartedAt   time.Time
 	ctx         context.Context
 	cancel      context.CancelFunc
-	stdout      *syncBuffer
-	stderr      *syncBuffer
+	stdout      jobOutput
+	stderr      jobOutput
 	done        chan struct{}
 	exitErr     error
 	completedAt atomic.Int64 // Unix timestamp when job completed (0 if still running)
@@ -79,6 +127,39 @@ func (bs *BackgroundShell) ClaimEnd() bool {
 type BackgroundShellManager struct {
 	mu     sync.Mutex
 	shells map[string]*BackgroundShell
+	// keepDir, when set, makes the manager keep its jobs running when
+	// gnosh exits (see SetKeepOnExit): their output goes to files there.
+	keepDir string
+}
+
+// SetKeepOnExit makes jobs started from now on outlive gnosh: their
+// output goes to files in dir rather than to memory, and Shutdown leaves
+// them running instead of stopping them, as a server the agent started
+// for a grader to talk to must be. An empty dir restores the default.
+func (m *BackgroundShellManager) SetKeepOnExit(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.keepDir = dir
+}
+
+// KeepsOnExit reports whether jobs outlive gnosh (see SetKeepOnExit).
+func (m *BackgroundShellManager) KeepsOnExit() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.keepDir != ""
+}
+
+// Shutdown is what gnosh does with its jobs as it exits: it stops them
+// all (KillAll) unless they are kept (SetKeepOnExit), in which case it
+// leaves the ones still running alone and only stops tracking them.
+func (m *BackgroundShellManager) Shutdown(ctx context.Context) {
+	if m.KeepsOnExit() {
+		m.mu.Lock()
+		m.shells = map[string]*BackgroundShell{}
+		m.mu.Unlock()
+		return
+	}
+	m.KillAll(ctx)
 }
 
 var (
@@ -126,6 +207,22 @@ func (m *BackgroundShellManager) StartAfter(ctx context.Context, workingDir stri
 
 	shellCtx, cancel := context.WithCancel(ctx)
 
+	var stdout, stderr jobOutput = &syncBuffer{}, &syncBuffer{}
+	if m.keepDir != "" {
+		name := fmt.Sprintf("job-%d-%s", os.Getpid(), id)
+		out, err := newFileOutput(m.keepDir, name+".out")
+		if err == nil {
+			var errOut *fileOutput
+			if errOut, err = newFileOutput(m.keepDir, name+".err"); err == nil {
+				stdout, stderr = out, errOut
+			}
+		}
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("could not create the output files of a background job: %w", err)
+		}
+	}
+
 	bgShell := &BackgroundShell{
 		ID:          id,
 		Command:     command,
@@ -135,8 +232,8 @@ func (m *BackgroundShellManager) StartAfter(ctx context.Context, workingDir stri
 		Shell:       shell,
 		ctx:         shellCtx,
 		cancel:      cancel,
-		stdout:      &syncBuffer{},
-		stderr:      &syncBuffer{},
+		stdout:      stdout,
+		stderr:      stderr,
 		done:        make(chan struct{}),
 	}
 
@@ -149,7 +246,7 @@ func (m *BackgroundShellManager) StartAfter(ctx context.Context, workingDir stri
 	go func() {
 		defer close(bgShell.done)
 
-		err := shell.ExecStream(shellCtx, script, bgShell.stdout, bgShell.stderr)
+		err := shell.ExecStream(shellCtx, script, writerOf(bgShell.stdout), writerOf(bgShell.stderr))
 
 		bgShell.exitErr = err
 		bgShell.completedAt.Store(time.Now().Unix())

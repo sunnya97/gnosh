@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -178,6 +179,7 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	}
 
 	app.setupEvents()
+	keepBackgroundJobs(cfg)
 
 	// Initialize clipboard support. This is best-effort; if it fails
 	// (e.g., headless environment), clipboard operations will return nil.
@@ -1444,9 +1446,10 @@ func (app *App) Shutdown() {
 		event.AppExited()
 	})
 
-	// Kill all background shells.
+	// Kill all background shells, unless they are kept running past
+	// gnosh's exit (option keep-background-jobs).
 	wg.Go(func() {
-		shell.GetBackgroundShellManager().KillAll(shutdownCtx)
+		shell.GetBackgroundShellManager().Shutdown(shutdownCtx)
 	})
 
 	// Close herdr client to stop its background writer.
@@ -1516,4 +1519,29 @@ func runError(err error) error {
 		return err
 	}
 	return fmt.Errorf("agent processing failed: %w", err)
+}
+
+// keepBackgroundJobs makes the background jobs the agent starts outlive
+// gnosh when the config asks for it (option keep-background-jobs, or
+// GNOSH_KEEP_BACKGROUND_JOBS=1): their output then goes to files under
+// the data directory, and shutdown leaves them running.
+func keepBackgroundJobs(cfg *config.Config) {
+	keep := false
+	if cfg != nil && cfg.Options != nil && cfg.Options.KeepBackgroundJobs != nil {
+		keep = *cfg.Options.KeepBackgroundJobs
+	}
+	switch strings.TrimSpace(os.Getenv("GNOSH_KEEP_BACKGROUND_JOBS")) {
+	case "1", "true":
+		keep = true
+	case "0", "false":
+		keep = false
+	}
+	if !keep {
+		return
+	}
+	dir := filepath.Join(os.TempDir(), "gnosh-jobs")
+	if cfg != nil && cfg.Options != nil && cfg.Options.DataDirectory != "" {
+		dir = filepath.Join(cfg.Options.DataDirectory, "jobs")
+	}
+	shell.GetBackgroundShellManager().SetKeepOnExit(dir)
 }

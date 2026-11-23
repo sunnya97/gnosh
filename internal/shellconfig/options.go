@@ -209,6 +209,8 @@ var optionSpecs = map[string]optionSpec{
 	"default-providers":    {jsonKey: "disable_default_providers", kind: optBool, inverted: true},
 	"idle-compaction":      {jsonKey: "disable_idle_compaction", kind: optBool, inverted: true},
 
+	"keep-background-jobs": {jsonKey: "keep_background_jobs", kind: optBool},
+
 	// String fields.
 	"notifications":   {jsonKey: "notifications", kind: optString},
 	"data-directory":  {jsonKey: "data_directory", kind: optString},
@@ -222,16 +224,20 @@ var optionSpecs = map[string]optionSpec{
 	"mem-embeddings-url": {jsonKey: "mem_embeddings_url", kind: optString},
 
 	// Integer fields.
-	"request-timeout":     {jsonKey: "request_timeout", kind: optInt},
-	"max-background-jobs": {jsonKey: "max_background_jobs", kind: optInt},
-	"loop-max-turns":      {jsonKey: "loop_max_turns", kind: optInt},
-	"auto-compact-window": {jsonKey: "auto_compact_window", kind: optInt},
+	"request-timeout":      {jsonKey: "request_timeout", kind: optInt},
+	"max-background-jobs":  {jsonKey: "max_background_jobs", kind: optInt},
+	"loop-max-turns":       {jsonKey: "loop_max_turns", kind: optInt},
+	"auto-compact-window":  {jsonKey: "auto_compact_window", kind: optInt},
+	"verify-rounds":        {jsonKey: "verify_rounds", kind: optInt},
+	"verify-wall-sec":      {jsonKey: "verify_wall_sec", kind: optInt},
+	"verify-check-timeout": {jsonKey: "verify_check_timeout", kind: optInt},
 
 	// List fields. Keys are singular because each call appends one value.
 	"context-path":        {jsonKey: "context_paths", kind: optList},
 	"global-context-path": {jsonKey: "global_context_paths", kind: optList},
 	"skill-path":          {jsonKey: "skills_paths", kind: optList},
 	"disable-skill":       {jsonKey: "disabled_skills", kind: optList},
+	"verify-check":        {jsonKey: "verify_checks", kind: optList},
 }
 
 // optionUI implements "option ui <key> <value>" for TUI-specific settings

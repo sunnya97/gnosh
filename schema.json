@@ -744,6 +744,37 @@
           "examples": [
             200
           ]
+        },
+        "verify_rounds": {
+          "type": "integer",
+          "description": "Turn on the completion loop: when a turn would end, check the workspace (changes, its own tests and checks, deleted tests, a commit the task asked for) and send the agent back up to this many times, then ask it to account for every requirement with evidence. Unset or 0 is off. GNOSH_VERIFY_ROUNDS overrides it.",
+          "examples": [
+            6
+          ]
+        },
+        "verify_wall_sec": {
+          "type": "integer",
+          "description": "The completion loop's wall-clock budget for a turn, in seconds from its start: no round starts without 90 seconds left. GNOSH_VERIFY_WALL_SEC or GNOSH_VERIFY_DEADLINE (unix seconds) override it.",
+          "examples": [
+            780
+          ]
+        },
+        "verify_checks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Commands the completion loop runs to decide the task is done (exit 0 passes), each name=command or a bare command. Unset, they are detected from package.json, pyproject.toml, go.mod, Cargo.toml or a Makefile."
+        },
+        "verify_check_timeout": {
+          "type": "integer",
+          "description": "Seconds each completion-loop check may run before it counts as failed",
+          "default": 600
+        },
+        "keep_background_jobs": {
+          "type": "boolean",
+          "description": "Leave the background jobs the agent started (servers, say) running when gnosh exits instead of stopping them; their output goes to files. GNOSH_KEEP_BACKGROUND_JOBS=1 also sets it.",
+          "default": false
         }
       },
       "additionalProperties": false,

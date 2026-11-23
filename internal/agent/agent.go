@@ -52,6 +52,7 @@ import (
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
+	"github.com/charmbracelet/crush/internal/verify"
 	"github.com/charmbracelet/crush/internal/version"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/charmtone"
@@ -193,6 +194,10 @@ type SessionAgentCall struct {
 	// judge having found it not met. Both ride along on continuations.
 	goalsSince time.Time
 	judgedGoal string
+	// verify is the turn's completion loop (see verifyContinuation), taken
+	// as the user's prompt starts it; it rides along on continuations. nil
+	// when the loop is off.
+	verify *verify.Run
 	// OnAuthRefresh, when non-nil, is called by fantasy when a stream
 	// fails with an authentication error (HTTP 401). The callback should
 	// refresh credentials and return nil on success, in which case
@@ -882,6 +887,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// it ends. A continuation keeps its turn's.
 	if call.goalsSince.IsZero() {
 		call.goalsSince = time.Now()
+	}
+	// The completion loop takes the workspace's state as the user's prompt
+	// starts a turn, before the agent changes anything.
+	if call.verify == nil && !call.HiddenUserMessage {
+		call.verify = a.startVerify(ctx, call.Prompt)
 	}
 	// The turn's hooks are told the session's permission mode, as Claude
 	// Code tells them; a sub-agent's turn keeps its parent's.
@@ -1816,6 +1826,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			a.queueContinuation(next)
 			continued = true
 		} else if next, blocked := a.stopHookContinuation(ctx, call, currentAssistant.Content().String()); blocked {
+			a.queueContinuation(next)
+			continued = true
+		} else if next, more := a.verifyContinuation(ctx, call, currentAssistant.Content().String()); more {
 			a.queueContinuation(next)
 			continued = true
 		}
