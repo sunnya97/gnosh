@@ -640,6 +640,11 @@ type Options struct {
 	// within it. GNOSH_VERIFY_WALL_SEC and GNOSH_VERIFY_DEADLINE (a unix
 	// time) override it.
 	VerifyWallSec *int `json:"verify_wall_sec,omitempty" jsonschema:"description=The completion loop's wall-clock budget for a turn\\, in seconds from its start: no round starts without 90 seconds left. GNOSH_VERIFY_WALL_SEC or GNOSH_VERIFY_DEADLINE (unix seconds) override it.,example=780"`
+	// AgentTimeoutSec is the harness agent's wall-clock budget, in
+	// seconds: time notes and sub-agent caps use it, not the completion
+	// loop's shorter verify-wall-sec reserve. GNOSH_AGENT_TIMEOUT_SEC and
+	// GNOSH_AGENT_DEADLINE (a unix time) override it.
+	AgentTimeoutSec *int `json:"agent_timeout_sec,omitempty" jsonschema:"description=The harness agent's wall-clock budget in seconds. Time warnings and sub-agent caps use this\\, not verify-wall-sec. GNOSH_AGENT_TIMEOUT_SEC or GNOSH_AGENT_DEADLINE (unix seconds) override it.,example=1800"`
 	// VerifyChecks are the completion loop's checks, each "name=command"
 	// or a command; unset, they are detected from the project's manifests.
 	VerifyChecks []string `json:"verify_checks,omitempty" jsonschema:"description=Commands the completion loop runs to decide the task is done (exit 0 passes)\\, each name=command or a bare command. Unset\\, they are detected from package.json\\, pyproject.toml\\, go.mod\\, Cargo.toml or a Makefile.,example=test=go test ./..."`

@@ -34,8 +34,9 @@ func TestOutcomeGuardRefusesSuccessNoteAfterFailedCommandOnce(t *testing.T) {
 	g := newOutcomeGuard()
 	bash := &guardFakeTool{name: tools.BashToolName, resp: bashResp(128, "Author identity unknown\nExit code 128")}
 	mem := &guardFakeTool{name: gnovmRunToolName, resp: fantasy.NewTextResponse("done")}
-	wrapped := wrapToolsWithOutcomeGuard([]fantasy.AgentTool{bash, mem, &guardFakeTool{name: "view"}}, g)
-	require.IsType(t, &guardFakeTool{}, wrapped[2], "other tools are not wrapped")
+	view := &guardFakeTool{name: "view", resp: fantasy.NewTextResponse("ok")}
+	wrapped := wrapToolsWithOutcomeGuard([]fantasy.AgentTool{bash, mem, view}, g)
+	require.IsType(t, &outcomeGuardedTool{}, wrapped[2], "every tool is wrapped for time notes")
 	ctx := context.WithValue(t.Context(), tools.SessionIDContextKey, "s1")
 
 	_, err := wrapped[0].Run(ctx, fantasy.ToolCall{Name: tools.BashToolName, Input: `{"command":"git commit -m x"}`})
@@ -87,9 +88,90 @@ func TestOutcomeGuardTimeNotes(t *testing.T) {
 	require.Contains(t, note, "about 5 of this task's 10 minutes are left")
 	require.Empty(t, g.timeNote("s", start.Add(6*time.Minute)), "once per threshold")
 	// Jumping past two thresholds gives one note.
-	require.Contains(t, g.timeNote("s", start.Add(9*time.Minute+30*time.Second)), "(30 seconds)")
+	final := g.timeNote("s", start.Add(9*time.Minute+30*time.Second))
+	require.Contains(t, final, "(30 seconds)")
+	require.Contains(t, final, "Stop further research. Write the task's required output artifacts now")
 	require.Empty(t, g.timeNote("s", start.Add(9*time.Minute+50*time.Second)))
 	require.Empty(t, g.timeNote("other", start.Add(9*time.Minute)))
 	g.setBudget("s", start, time.Time{})
 	require.Empty(t, g.timeNote("s", start.Add(9*time.Minute)))
+}
+
+func TestParseAgentBudgetPrefersHarnessDeadline(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	env := map[string]string{
+		"GNOSH_AGENT_TIMEOUT_SEC": "1800",
+		"GNOSH_AGENT_DEADLINE":    "1001800",
+	}
+	getenv := func(k string) string { return env[k] }
+	start, deadline, ok := parseAgentBudget(now, getenv, 900)
+	require.True(t, ok)
+	require.Equal(t, time.Unix(1_000_000, 0), start, "start is deadline minus the timeout, not now")
+	require.Equal(t, time.Unix(1_001_800, 0), deadline)
+	// Env timeout overrides the option.
+	start, deadline, ok = parseAgentBudget(now, getenv, 900)
+	require.Equal(t, 1800, int(deadline.Sub(start).Seconds()))
+	// Timeout only.
+	start, deadline, ok = parseAgentBudget(now, func(string) string { return "" }, 1800)
+	require.True(t, ok)
+	require.Equal(t, now, start)
+	require.Equal(t, now.Add(1800*time.Second), deadline)
+	_, _, ok = parseAgentBudget(now, func(string) string { return "" }, 0)
+	require.False(t, ok)
+}
+
+func TestOutcomeGuardTimeNoteCatchUpOnAnyTool(t *testing.T) {
+	g := newOutcomeGuard()
+	start := time.Unix(1000, 0)
+	g.setBudget("s", start, start.Add(30*time.Minute))
+	// A long non-bash tool that jumps past every threshold yields one
+	// catch-up note, including the wrap-up wording.
+	note := g.timeNote("s", start.Add(28*time.Minute))
+	require.Contains(t, note, "about 2 of this task's 30 minutes are left")
+	require.Contains(t, note, "Stop further research. Write the task's required output artifacts now")
+	require.Empty(t, g.timeNote("s", start.Add(29*time.Minute)), "one catch-up note for a jump past every threshold")
+
+	// The wrapper appends the note to any tool result, not just bash.
+	g2 := newOutcomeGuard()
+	now := time.Now()
+	g2.setBudget("s", now.Add(-16*time.Minute), now.Add(14*time.Minute))
+	fetch := &guardFakeTool{name: "agentic_fetch", resp: fantasy.NewTextResponse("could not fetch")}
+	w := wrapToolsWithOutcomeGuard([]fantasy.AgentTool{fetch}, g2)
+	ctx := context.WithValue(t.Context(), tools.SessionIDContextKey, "s")
+	resp, err := w[0].Run(ctx, fantasy.ToolCall{Name: "agentic_fetch", Input: `{}`})
+	require.NoError(t, err)
+	require.Contains(t, resp.Content, "could not fetch")
+	require.Contains(t, resp.Content, "of this task's 30 minutes are left")
+}
+
+func TestOutcomeGuardTimeNoteMidThresholdWording(t *testing.T) {
+	g := newOutcomeGuard()
+	start := time.Unix(1000, 0)
+	g.setBudget("s", start, start.Add(10*time.Minute))
+	note := g.timeNote("s", start.Add(5*time.Minute))
+	require.Contains(t, note, "about 5 of this task's 10 minutes are left")
+	require.NotContains(t, note, "Stop further research")
+	require.Contains(t, note, "put it in place now")
+}
+
+func TestSubAgentCapLeavesReserve(t *testing.T) {
+	cap, ok := subAgentCap(10 * time.Minute)
+	require.True(t, ok)
+	require.Equal(t, 10*time.Minute-subAgentReserve, cap)
+	_, ok = subAgentCap(subAgentReserve)
+	require.False(t, ok)
+	_, ok = subAgentCap(subAgentReserve + 4*time.Second)
+	require.False(t, ok)
+	_, ok = subAgentCap(subAgentReserve + 5*time.Second)
+	require.True(t, ok)
+}
+
+func TestSetBudgetKeepsNotesOnSameDeadline(t *testing.T) {
+	g := newOutcomeGuard()
+	start := time.Unix(1000, 0)
+	dead := start.Add(10 * time.Minute)
+	g.setBudget("s", start, dead)
+	require.Contains(t, g.timeNote("s", start.Add(5*time.Minute)), "5 of this task's 10 minutes")
+	g.setBudget("s", start, dead)
+	require.Empty(t, g.timeNote("s", start.Add(6*time.Minute)))
 }

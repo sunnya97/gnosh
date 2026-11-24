@@ -231,6 +231,7 @@ var optionSpecs = map[string]optionSpec{
 	"verify-rounds":        {jsonKey: "verify_rounds", kind: optInt},
 	"verify-wall-sec":      {jsonKey: "verify_wall_sec", kind: optInt},
 	"verify-check-timeout": {jsonKey: "verify_check_timeout", kind: optInt},
+	"agent-timeout-sec":    {jsonKey: "agent_timeout_sec", kind: optInt},
 
 	// List fields. Keys are singular because each call appends one value.
 	"context-path":        {jsonKey: "context_paths", kind: optList},

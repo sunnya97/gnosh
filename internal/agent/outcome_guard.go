@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,29 +41,36 @@ type failedCommand struct {
 type outcomeGuard struct {
 	mu     sync.Mutex
 	failed map[string]failedCommand
-	// budgets are the completion loop's time budgets by session (see
-	// setBudget), for the time notes on bash results.
+	// budgets are the harness agent's time budgets by session (see
+	// setBudget), for the time notes on tool results.
 	budgets map[string]*timeBudget
 }
 
-// timeBudget is a turn's wall-clock budget, from start to deadline, and
-// how many of timeNoteAt's notes it has been given.
+// timeBudget is the harness agent's wall-clock budget, from start to
+// deadline, and how many of timeNoteAt's notes it has been given.
 type timeBudget struct {
 	start, deadline time.Time
 	noted           int
 }
 
-// timeNoteAt are the fractions of a turn's time budget used up at which
-// a bash result carries a note of the time left. Benchmark tasks with a
-// hard time limit were lost with their output never written: the agent,
-// one long first turn in, did not know the time was nearly gone.
+// timeNoteAt are the fractions of the harness agent's time budget used
+// up at which a tool result carries a note of the time left. Benchmark
+// tasks with a hard time limit were lost with their output never written:
+// the agent, one long first turn in, did not know the time was nearly gone.
 var timeNoteAt = []float64{0.5, 0.75, 0.9}
+
+// subAgentReserve is how much of the harness budget must remain after a
+// sub-agent (agentic_fetch, say) stops, so the parent can still write
+// the task's required output.
+const subAgentReserve = 90 * time.Second
 
 func newOutcomeGuard() *outcomeGuard {
 	return &outcomeGuard{failed: map[string]failedCommand{}, budgets: map[string]*timeBudget{}}
 }
 
-// setBudget records a session's turn budget; a zero deadline clears it.
+// setBudget records a session's harness-agent budget; a zero deadline
+// clears it. A later call with the same deadline keeps the notes already
+// given, so a continuation of the same turn does not repeat them.
 func (g *outcomeGuard) setBudget(sessionID string, start, deadline time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -70,10 +78,73 @@ func (g *outcomeGuard) setBudget(sessionID string, start, deadline time.Time) {
 		delete(g.budgets, sessionID)
 		return
 	}
+	if b := g.budgets[sessionID]; b != nil && b.deadline.Equal(deadline) {
+		return
+	}
 	g.budgets[sessionID] = &timeBudget{start: start, deadline: deadline}
 }
 
-// timeNote is the note to add to a result at now, or "".
+// remaining is how long sessionID has until its harness deadline, or
+// false when no budget was set.
+func (g *outcomeGuard) remaining(sessionID string, now time.Time) (time.Duration, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	b := g.budgets[sessionID]
+	if b == nil {
+		return 0, false
+	}
+	left := b.deadline.Sub(now)
+	if left < 0 {
+		left = 0
+	}
+	return left, true
+}
+
+// subAgentCap is how long a sub-agent may run given the parent's remaining
+// budget: remaining minus subAgentReserve, or false when that would leave
+// it too little time to start.
+func subAgentCap(remaining time.Duration) (time.Duration, bool) {
+	cap := remaining - subAgentReserve
+	if cap < 5*time.Second {
+		return 0, false
+	}
+	return cap, true
+}
+
+// parseAgentBudget reads the harness agent's wall budget from
+// GNOSH_AGENT_DEADLINE (unix seconds), GNOSH_AGENT_TIMEOUT_SEC, and
+// optionSec (option agent-timeout-sec). The deadline is the one the
+// harness will enforce; the start is deadline minus the timeout when
+// both are known, otherwise now.
+func parseAgentBudget(now time.Time, getenv func(string) string, optionSec int) (start, deadline time.Time, ok bool) {
+	if getenv == nil {
+		getenv = func(string) string { return "" }
+	}
+	timeoutSec := optionSec
+	if v := strings.TrimSpace(getenv("GNOSH_AGENT_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			timeoutSec = int(n)
+		}
+	}
+	if v := strings.TrimSpace(getenv("GNOSH_AGENT_DEADLINE")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			deadline = time.Unix(n, 0)
+		}
+	}
+	if !deadline.IsZero() && timeoutSec > 0 {
+		return deadline.Add(-time.Duration(timeoutSec) * time.Second), deadline, true
+	}
+	if !deadline.IsZero() {
+		return now, deadline, deadline.After(now)
+	}
+	if timeoutSec > 0 {
+		return now, now.Add(time.Duration(timeoutSec) * time.Second), true
+	}
+	return time.Time{}, time.Time{}, false
+}
+
+// timeNote is the note to add to a result at now, or "". A long tool call
+// that crosses one or more thresholds yields a single catch-up note.
 func (g *outcomeGuard) timeNote(sessionID string, now time.Time) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -82,6 +153,9 @@ func (g *outcomeGuard) timeNote(sessionID string, now time.Time) string {
 		return ""
 	}
 	total := b.deadline.Sub(b.start)
+	if total <= 0 {
+		return ""
+	}
 	used := float64(now.Sub(b.start)) / float64(total)
 	if used < timeNoteAt[b.noted] {
 		return ""
@@ -90,9 +164,20 @@ func (g *outcomeGuard) timeNote(sessionID string, now time.Time) string {
 		b.noted++
 	}
 	left := max(0, b.deadline.Sub(now))
-	return fmt.Sprintf("\n\n[gnosh: about %d of this task's %d minutes are left (%d seconds). "+
-		"If what the task must produce (its output files, its running service, its commit) is not in place yet, put it in place now, simplest working version first, then improve it.]",
+	final := b.noted >= len(timeNoteAt) || left == 0
+	return formatTimeNote(left, total, final)
+}
+
+func formatTimeNote(left, total time.Duration, final bool) string {
+	head := fmt.Sprintf("\n\n[gnosh: about %d of this task's %d minutes are left (%d seconds). ",
 		int(left.Minutes()+0.5), int(total.Minutes()+0.5), int(left.Seconds()))
+	if final {
+		return head + "Stop further research. Write the task's required output artifacts now " +
+			"(its output files, its running service, its commit), simplest working version first, " +
+			"then improve them if time remains.]"
+	}
+	return head + "If what the task must produce (its output files, its running service, its commit) " +
+		"is not in place yet, put it in place now, simplest working version first, then improve it.]"
 }
 
 // outcomes is shared by every agent's tools: keyed by session, a
@@ -188,24 +273,22 @@ func (t *outcomeGuardedTool) Run(ctx context.Context, call fantasy.ToolCall) (fa
 	resp, err := t.inner.Run(ctx, call)
 	if err == nil {
 		t.g.observe(sessionID, call, resp)
-		if call.Name == tools.BashToolName && resp.Type == "text" {
-			resp.Content += t.g.timeNote(sessionID, time.Now())
+		// Append a catch-up time note to any tool result, including
+		// non-bash tools, when a warning threshold was crossed while
+		// the call ran (a long agentic_fetch, say).
+		if note := t.g.timeNote(sessionID, time.Now()); note != "" {
+			resp.Content += note
 		}
 	}
 	return resp, err
 }
 
-// wrapToolsWithOutcomeGuard guards the bash and gnovm_run tools (see
-// outcomeGuard); the others are returned as they are.
+// wrapToolsWithOutcomeGuard guards every tool: bash and gnovm_run as
+// described on outcomeGuard, and all of them for the time notes.
 func wrapToolsWithOutcomeGuard(list []fantasy.AgentTool, g *outcomeGuard) []fantasy.AgentTool {
 	out := make([]fantasy.AgentTool, len(list))
 	for i, tool := range list {
-		switch tool.Info().Name {
-		case tools.BashToolName, gnovmRunToolName:
-			out[i] = &outcomeGuardedTool{inner: tool, g: g}
-		default:
-			out[i] = tool
-		}
+		out[i] = &outcomeGuardedTool{inner: tool, g: g}
 	}
 	return out
 }

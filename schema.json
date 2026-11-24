@@ -759,6 +759,13 @@
             780
           ]
         },
+        "agent_timeout_sec": {
+          "type": "integer",
+          "description": "The harness agent's wall-clock budget in seconds. Time warnings and sub-agent caps use this, not verify-wall-sec. GNOSH_AGENT_TIMEOUT_SEC or GNOSH_AGENT_DEADLINE (unix seconds) override it.",
+          "examples": [
+            1800
+          ]
+        },
         "verify_checks": {
           "items": {
             "type": "string"

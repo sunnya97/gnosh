@@ -2301,6 +2301,22 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 	// its first prompt, as Claude Code gives it.
 	startContext := c.runSubagentStartHooks(ctx, params.SessionID, session.ID, params.AgentType)
 
+	// Cap a sub-agent (agentic_fetch included) so it cannot spend the
+	// rest of the harness budget: it may run for at most the time
+	// remaining minus a reserve, so the parent can still write the
+	// task's required output.
+	if rem, ok := outcomes.remaining(params.SessionID, time.Now()); ok {
+		if cap, ok := subAgentCap(rem); ok {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, cap)
+			defer cancel()
+			slog.Info("Sub-agent wall cap", "parent_session", params.SessionID, "cap_sec", int(cap.Seconds()), "remaining_sec", int(rem.Seconds()))
+		} else {
+			return fantasy.NewTextErrorResponse(
+				"There's not enough time left to start this sub-agent. Stop further research and write the task's required output artifacts now (its output files, its running service, its commit), simplest working version first."), nil
+		}
+	}
+
 	// Run the agent
 	run := func() (*fantasy.AgentResult, error) {
 		return params.Agent.Run(ctx, SessionAgentCall{
@@ -2319,6 +2335,10 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		})
 	}
 	result, err := run()
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return fantasy.NewTextErrorResponse(
+			"This sub-agent was stopped because the harness time budget is almost gone. Stop further research and write the task's required output artifacts now (its output files, its running service, its commit), simplest working version first."), nil
+	}
 	// Notify only if still unauthorized after retry. AWS SSO is handled
 	// transparently inside OnAuthRefresh, so it needs no post-run notice.
 	if err != nil && isUnauthorized(err) && c.notify != nil && model.ModelCfg.Provider == hyper.Name {

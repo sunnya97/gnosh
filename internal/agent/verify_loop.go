@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/verify"
@@ -30,6 +31,28 @@ func (a *sessionAgent) verifyConfig() verify.Config {
 	return verify.ApplyEnv(c, nil)
 }
 
+
+// startTimeBudget records the harness agent's wall-clock budget for the
+// session, from GNOSH_AGENT_DEADLINE, GNOSH_AGENT_TIMEOUT_SEC, or option
+// agent-timeout-sec. Time notes use this budget, not the completion loop's
+// shorter verify-wall-sec reserve. Sub-agents inherit the parent's session
+// only as a cap; they do not start a new budget.
+func (a *sessionAgent) startTimeBudget(sessionID string) {
+	if a.isSubAgent || sessionID == "" {
+		return
+	}
+	var optionSec int
+	if a.cfg != nil {
+		if cfg := a.cfg.Config(); cfg != nil && cfg.Options != nil && cfg.Options.AgentTimeoutSec != nil && *cfg.Options.AgentTimeoutSec > 0 {
+			optionSec = *cfg.Options.AgentTimeoutSec
+		}
+	}
+	start, deadline, ok := parseAgentBudget(time.Now(), os.Getenv, optionSec)
+	if ok {
+		outcomes.setBudget(sessionID, start, deadline)
+	}
+}
+
 // startVerify starts the completion loop for a turn the user's prompt
 // begins; nil when the loop is off, for a sub-agent, whose parent's turn
 // is the one verified, or without a working directory.
@@ -43,7 +66,6 @@ func (a *sessionAgent) startVerify(ctx context.Context, sessionID, prompt string
 	}
 	r := verify.Start(ctx, c, a.cfg.WorkingDir(), prompt)
 	if r != nil {
-		outcomes.setBudget(sessionID, r.Started, r.Deadline())
 		var names []string
 		for _, ch := range r.Checks() {
 			names = append(names, ch.Name)

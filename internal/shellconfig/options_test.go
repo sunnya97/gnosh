@@ -283,6 +283,7 @@ func TestOption_CompletionLoopAndKeepJobs(t *testing.T) {
 	script := `option verify-rounds 4
 option verify-wall-sec 780
 option verify-check-timeout 120
+option agent-timeout-sec 1800
 option verify-check "test=go test ./..."
 option verify-check "make lint"
 option keep-background-jobs true`
@@ -295,6 +296,7 @@ option keep-background-jobs true`
 	require.EqualValues(t, 4, opts["verify_rounds"])
 	require.EqualValues(t, 780, opts["verify_wall_sec"])
 	require.EqualValues(t, 120, opts["verify_check_timeout"])
+	require.EqualValues(t, 1800, opts["agent_timeout_sec"])
 	require.Equal(t, []any{"test=go test ./...", "make lint"}, opts["verify_checks"])
 	require.Equal(t, true, opts["keep_background_jobs"])
 }
